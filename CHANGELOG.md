@@ -2,7 +2,9 @@
 
 ## [Unreleased][] (YYYY-MM-DD)
 
-_No changes yet._
+### Chores
+
+- Add CLAUDE.md for Claude Code guidance.
 
 ## [0.4.0][] (2026-01-19)
 
