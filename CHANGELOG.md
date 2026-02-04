@@ -4,7 +4,9 @@
 
 ### Chores
 
-- Add CLAUDE.md for Claude Code guidance.
+- Add CLAUDE.md for Claude Code guidance. ([#115][])
+
+   [#115]: https://github.com/polis-community/red-dwarf/pull/115
 
 ## [0.4.0][] (2026-01-19)
 
