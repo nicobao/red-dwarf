@@ -184,12 +184,12 @@ class TestPolisKMeans:
             pkm.fit(X)
 
     def test_unsupported_init_strategy(self, simple_data):
-        """Test that unsupported init strategy raises error."""
+        """Test that unsupported init strategy raises error with valid options."""
         X, _ = simple_data
-        pkm = PolisKMeans(n_clusters=3, init="invalid")
+        pkm = PolisKMeans(n_clusters=3, init="k-means++")
         pkm._init_strategy = "invalid"  # Bypass __init__ validation
 
-        with pytest.raises(ValueError, match="Unsupported init strategy"):
+        with pytest.raises(ValueError, match=r"Unsupported init strategy.*k-means\+\+.*random.*polis"):
             pkm.fit(X)
 
     def test_reproducibility_with_random_state(self, simple_data):
