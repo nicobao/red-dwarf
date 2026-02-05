@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -8,6 +8,9 @@ from sklearn.metrics import silhouette_score
 from sklearn.utils.validation import check_random_state, check_array
 
 from reddwarf.sklearn.model_selection import GridSearchNonCV
+
+InitStrategy = Literal["k-means++", "random", "polis"]
+VALID_INIT_STRATEGIES: List[str] = ["k-means++", "random", "polis"]
 
 
 def _to_range(r) -> range:
@@ -76,8 +79,8 @@ class PolisKMeans(KMeans):
     def __init__(
         self,
         n_clusters=8,
-        init="k-means++",  # or 'random', 'polis'
-        init_centers: Optional[ArrayLike] = None,  # array-like, optional
+        init: InitStrategy = "k-means++",
+        init_centers: Optional[ArrayLike] = None,
         n_init="auto",
         max_iter=300,
         tol=1e-4,
@@ -120,7 +123,10 @@ class PolisKMeans(KMeans):
                 raise ValueError("Not enough unique rows in X for 'polis' strategy.")
             centers = unique_X[:n_to_generate]
         else:
-            raise ValueError(f"Unsupported init strategy: {self._init_strategy}")
+            raise ValueError(
+                f"Unsupported init strategy: {self._init_strategy!r}. "
+                f"Valid options are: {VALID_INIT_STRATEGIES}"
+            )
         return centers
 
     def fit(self, X, y=None, sample_weight=None):
@@ -178,7 +184,7 @@ class PolisKMeansDownsampler(BaseEstimator, TransformerMixin):
         self,
         n_clusters: int = 100,
         random_state: Optional[int] = None,
-        init: str = "k-means++",
+        init: InitStrategy = "k-means++",
         init_centers: Optional[ArrayLike] = None,
     ):
         self.n_clusters = n_clusters
@@ -232,7 +238,7 @@ class BestPolisKMeans(BaseEstimator):
     def __init__(
         self,
         k_bounds: Optional[List[int]] = None,
-        init: str = "polis",
+        init: InitStrategy = "polis",
         init_centers: Optional[ArrayLike] = None,
         random_state: Optional[int] = None,
     ):
