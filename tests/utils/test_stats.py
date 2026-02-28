@@ -6,6 +6,7 @@ from reddwarf.utils import stats
 
 from reddwarf.utils import stats, polismath, matrix
 from reddwarf.data_loader import Loader
+from tests import helpers
 
 def test_importance_metric_no_votes():
     expected_importance = [ 1/4,   2/4,   1,     2,      4   ]
@@ -343,7 +344,48 @@ def test_group_aware_consensus_real_data(polis_convo_data):
         for pid, row in gac_df.iterrows()
     }
 
-    assert calculated_gac == pytest.approx(fixture.math_data["group-aware-consensus"])
+    n_groups = len(set(cluster_labels))
+    expected_gac = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
+    assert calculated_gac == pytest.approx(expected_gac)
+
+
+def test_group_aware_consensus_uses_geometric_mean():
+    """
+    Verify that group-aware consensus uses geometric mean (product^(1/n_groups))
+    so that scores are comparable regardless of the number of groups.
+    """
+    # Build a vote matrix: 6 participants, 2 groups, 1 statement.
+    # All participants agree on the statement.
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4, 5],
+    )
+    # 2 groups of 3 participants each
+    cluster_labels_2 = [0, 0, 0, 1, 1, 1]
+    # 3 groups of 2 participants each
+    cluster_labels_3 = [0, 0, 1, 1, 2, 2]
+
+    *_, C_2 = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels_2,
+    )
+    *_, C_3 = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels_3,
+    )
+
+    agree_score_2_groups = C_2[0, 0]  # votes.A = 0
+    agree_score_3_groups = C_3[0, 0]
+
+    # With geometric mean, both should be close (same underlying consensus).
+    # Without it (raw product), 3 groups would give 0.512 vs 0.640 — much wider gap.
+    # Small difference remains due to Laplace smoothing on smaller groups.
+    assert agree_score_2_groups == pytest.approx(agree_score_3_groups, abs=0.06)
+
+    # Both should be well above 0.5 (all participants agree)
+    assert agree_score_2_groups > 0.5
+    assert agree_score_3_groups > 0.5
+
 
 def test_format_comment_stats_repful_agree():
     statement = pd.Series({

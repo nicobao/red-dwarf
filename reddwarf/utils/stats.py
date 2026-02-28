@@ -294,10 +294,14 @@ def calculate_comment_statistics(
         )  # rdt
 
     # Calculate group-aware consensus
-    # For each statement, multiply probabilities across groups (aka the first axis=0)
+    # Geometric mean: normalize for group count so that similar levels of
+    # cross-group consensus produce similar scores regardless of whether
+    # the conversation has 2 or 6 opinion groups. This helps when applying
+    # a selection algorithm with a fixed threshold (e.g. 0.5).
     # Reference: https://github.com/compdemocracy/polis/blob/edge/math/src/polismath/math/conversation.clj#L615-L636
-    C_v_c[votes.A, :] = P_v_g_c[votes.A, :, :].prod(axis=0)
-    C_v_c[votes.D, :] = P_v_g_c[votes.D, :, :].prod(axis=0)
+    n_groups = P_v_g_c.shape[1]
+    C_v_c[votes.A, :] = P_v_g_c[votes.A, :, :].prod(axis=0) ** (1.0 / n_groups)
+    C_v_c[votes.D, :] = P_v_g_c[votes.D, :, :].prod(axis=0) ** (1.0 / n_groups)
 
     return (
         N_g_c,  # ns

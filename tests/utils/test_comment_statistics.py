@@ -116,8 +116,11 @@ def test_calculate_comment_statistics_dataframes_gac_df_real_data(polis_convo_da
     fixture = polis_convo_data
     _, gac_df = setup_test(fixture)
 
+    _, cluster_labels = polismath.extract_data_from_polismath(fixture.math_data)
+    n_groups = len(set(cluster_labels))
+
     calculated = helpers.simulate_api_response(gac_df["group-aware-consensus"].items())
-    expected = fixture.math_data["group-aware-consensus"]
+    expected = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
     assert_dict_equal(calculated, expected)
 
 

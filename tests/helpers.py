@@ -223,6 +223,19 @@ def simulate_api_response(data):
     """
     return json.loads(json.dumps(dict(data)))
 
+def polis_gac_to_geometric_mean(n_groups, polis_gac):
+    """
+    Transform Polis raw-product group-aware-consensus values into geometric mean.
+
+    Polis fixture data uses raw product (prod of per-group probabilities).
+    Reddwarf uses geometric mean (product^(1/n_groups)) to normalize for group count.
+    """
+    return {
+        k: v ** (1.0 / n_groups)
+        for k, v in polis_gac.items()
+    }
+
+
 class ReportType(Enum):
     SUMMARY = "summary"
     VOTES = "votes"

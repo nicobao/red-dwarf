@@ -27,6 +27,7 @@ def test_load_data_from_api_conversation():
         'use_xid_whitelist', 'prioritize_seed', 'importance_enabled',
         'site_id', 'translations', 'treevite_enabled',
         'ownername', 'is_mod', 'is_owner', 'conversation_id',
+        'topics_enabled',
     ]
     assert sorted(loader.conversation_data) == sorted(expected_keys)
 
