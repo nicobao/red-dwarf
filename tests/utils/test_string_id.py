@@ -106,10 +106,11 @@ def test_run_pipeline_with_string_statement_ids(polis_convo_data):
         force_group_count=force_group_count,
     )
     
+    n_groups = len(math_data["group-clusters"])
     calculated = helpers.simulate_api_response(
         result.statements_df["group-aware-consensus"].items()
     )
-    expected = math_data["group-aware-consensus"]
+    expected = helpers.polis_gac_to_geometric_mean(n_groups, math_data["group-aware-consensus"])
     assert_dict_equal(calculated, expected)
 
     assert pytest.approx(result.reducer.components_[0]) == math_data["pca"]["comps"][0]
