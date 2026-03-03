@@ -657,13 +657,17 @@ def select_representative_statements(
         # Finalize statements into output format.
         # TODO: Figure out how to finalize only at end in output. Change repness_metric?
 
-        # most likely won't happen
+        # Fallback: no statements passed significance tests even at lowest confidence.
+        # Pick the single best statement by repness z-score, formatted properly.
         if len(sufficient_statements) == 0:
             best_overall = None
             for _, row in group_df.iterrows():
                 if beats_best_by_repness_test(row, best_overall):
                     best_overall = row
-            selected = [best_overall]
+            if best_overall is not None:
+                selected = [format_comment_stats(best_overall, actual_confidence)]
+            else:
+                selected = []
         else:
             sufficient_statements = (
                 pd.DataFrame(
