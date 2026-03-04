@@ -100,6 +100,11 @@ def is_statement_significant(row: pd.Series, confidence=0.90) -> bool:
     return is_agreement_significant or is_disagreement_significant
 
 
+# DIVERGENCE FROM POLIS: Polis determines repful_for using the higher of
+# ra (agree representativeness ratio) vs rd (disagree representativeness ratio).
+# We instead use significance tests (rat/rdt z-scores) with a confidence
+# threshold, falling back to the raw z-score comparison only when neither
+# direction passes the significance test.
 def get_statement_repful_for(
     row: pd.Series, confidence=0.90
 ) -> Literal["agree", "disagree"]:
@@ -338,14 +343,29 @@ def calculate_comment_statistics(
         )  # rdt
 
     # Calculate group-aware consensus
-    # Geometric mean: normalize for group count so that similar levels of
-    # cross-group consensus produce similar scores regardless of whether
-    # the conversation has 2 or 6 opinion groups. This helps when applying
-    # a selection algorithm with a fixed threshold (e.g. 0.5).
-    # Reference: https://github.com/compdemocracy/polis/blob/edge/math/src/polismath/math/conversation.clj#L615-L636
+    # Reference (original Polis): https://github.com/compdemocracy/polis/blob/edge/math/src/polismath/math/conversation.clj#L615-L636
+    #
+    # DIVERGENCE #1 FROM POLIS (geometric mean):
+    # Polis uses a raw product of per-group probabilities. This shrinks
+    # exponentially with more groups, making consensus scores unreachable
+    # for conversations with 4-6 opinion groups. We use a geometric mean
+    # (prod^(1/n_groups)) so that similar levels of cross-group consensus
+    # produce similar scores regardless of group count.
+    #
+    # DIVERGENCE #2 FROM POLIS (effective agreement):
+    # Polis uses raw p_agree per group, ignoring p_disagree entirely. This
+    # means a group that is genuinely divided (similar levels of agree and
+    # disagree) contributes the same score as an undivided group with the
+    # same agree level — allowing divided groups to be masked by other
+    # groups' strong agreement. We fix this by using "effective agreement":
+    # p_agree * (1 - p_disagree), which discounts each group's agreement
+    # by its disagreement so a divided group naturally drags down the
+    # consensus score.
     n_groups = P_v_g_c.shape[1]
-    C_v_c[votes.A, :] = P_v_g_c[votes.A, :, :].prod(axis=0) ** (1.0 / n_groups)
-    C_v_c[votes.D, :] = P_v_g_c[votes.D, :, :].prod(axis=0) ** (1.0 / n_groups)
+    effective_agree = P_v_g_c[votes.A, :, :] * (1 - P_v_g_c[votes.D, :, :])
+    effective_disagree = P_v_g_c[votes.D, :, :] * (1 - P_v_g_c[votes.A, :, :])
+    C_v_c[votes.A, :] = effective_agree.prod(axis=0) ** (1.0 / n_groups)
+    C_v_c[votes.D, :] = effective_disagree.prod(axis=0) ** (1.0 / n_groups)
 
     return (
         N_g_c,  # ns
@@ -581,6 +601,13 @@ def priority_metric(
 # Figuring out select-rep-comments flow
 # See: https://github.com/compdemocracy/polis/blob/7bf9eccc287586e51d96fdf519ae6da98e0f4a70/math/src/polismath/math/repness.clj#L209C7-L209C26
 # TODO: omg please clean this up.
+#
+# DIVERGENCE FROM POLIS: Polis uses a fixed confidence level and may return
+# fewer than pick_max statements when not enough pass the significance test.
+# We progressively lower the confidence from the initial value down to 0.60
+# (in 0.05 steps) to fill up to pick_max representative statements. If no
+# statements pass even the lowest confidence, we fall back to the single
+# best statement by repness z-score.
 def select_representative_statements(
     grouped_stats_df: pd.DataFrame,
     mod_out_statement_ids: list[int] = [],
@@ -589,8 +616,6 @@ def select_representative_statements(
 ) -> PolisRepness:
     """
     Selects statistically representative statements from each group cluster.
-
-    This is expected to match the Polis outputs when all defaults are set.
 
     Args:
         grouped_stats_df (pd.DataFrame): MultiIndex Dataframe of statement statistics, indexed by group and statement.
