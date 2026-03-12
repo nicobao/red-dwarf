@@ -2,7 +2,21 @@
 
 ## `reddwarf.implementations.base`
 
-### ::: reddwarf.implementations.polis.run_pipeline
+### ::: reddwarf.implementations.base.run_pipeline
+    options:
+        show_root_heading: true
+
+## `reddwarf.implementations.agora`
+
+### ::: reddwarf.implementations.agora.run_pipeline
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.implementations.agora.AgoraClusteringResult
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.implementations.agora.compute_effective_agreement_gac
     options:
         show_root_heading: true
 
@@ -74,9 +88,21 @@ use in Scikit-Learn workflows, pipelines, and APIs.
     options:
         show_root_heading: true
 
+### ::: reddwarf.utils.consensus.rank_consensus_statements
+    options:
+        show_root_heading: true
+
 ## `reddwarf.utils.stats`
 
 ### ::: reddwarf.utils.stats.select_representative_statements
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.utils.stats.rank_representative_statements
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.utils.stats.apply_bh_with_vote_filter
     options:
         show_root_heading: true
 
@@ -127,3 +153,14 @@ use in Scikit-Learn workflows, pipelines, and APIs.
     options:
         show_root_heading: true
 
+### ::: reddwarf.types.agora.RankedRepnessStatement
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.types.agora.RankedConsensusStatement
+    options:
+        show_root_heading: true
+
+### ::: reddwarf.types.agora.RankedConsensusResult
+    options:
+        show_root_heading: true

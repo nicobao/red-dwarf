@@ -2,9 +2,23 @@
 
 ## [Unreleased][] (YYYY-MM-DD)
 
+### Changes
+
+- Re-add Agora implementation with statistical improvements over Polis.
+  - Benjamini-Hochberg FDR control for statement selection (replaces heuristic `pick_max`).
+  - Simes' p-value combination for repness (valid under positive dependence between probability and representativeness tests).
+  - Effective agreement GAC: `prod(pa*(1-pd))^(1/n)` penalizes divided groups (replaces raw `prod(pa)^(1/n)`).
+  - Zero-vote filter: excludes statements with no votes from BH hypothesis count.
+  - Shared `apply_bh_with_vote_filter()` helper for modular BH computation.
+- Add `agora-demo.ipynb` notebook as recommended quickstart.
+- Document Agora implementation in API reference.
+- Position Agora as the recommended default pipeline in README.
+
 ### Chores
 
 - Add CLAUDE.md for Claude Code guidance. ([#115][])
+- Add cram snapshot tests for Agora pipeline output.
+- Add Polis vs Agora selection comparison to cram snapshot.
 
    [#115]: https://github.com/polis-community/red-dwarf/pull/115
 

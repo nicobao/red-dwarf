@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Literal
 from types import SimpleNamespace
 from scipy.stats import norm
 from reddwarf.utils.matrix import VoteMatrix
@@ -9,6 +9,7 @@ from reddwarf.types.polis import (
     PolisRepness,
     PolisRepnessStatement,
 )
+from reddwarf.types.agora import RankedRepnessStatement
 from reddwarf.utils.reducer.pca import calculate_extremity
 
 
@@ -68,20 +69,141 @@ def two_prop_test(
 def is_significant(z_val: float, confidence: float = 0.90) -> bool:
     """Test whether z-statistic is significant at 90% confidence (one-tailed, right-side)."""
     critical_value = norm.ppf(confidence)  # 90% confidence level, one-tailed
-    return z_val > critical_value
+    return z_val > critical_value  # rat/rdt can be negative
+
+
+def z_to_pvalue(z: ArrayLike) -> np.floating | NDArray[np.floating]:
+    """Convert one-tailed right-side z-scores to p-values."""
+    return 1 - norm.cdf(np.asarray(z))
+
+
+def benjamini_hochberg(p_values: NDArray, fdr_rate: float) -> NDArray[np.bool_]:
+    """Benjamini-Hochberg procedure for controlling false discovery rate.
+
+    Returns a boolean mask indicating which hypotheses are rejected (selected).
+    """
+    p_values = np.asarray(p_values, dtype=float)
+    n = len(p_values)
+    if n == 0:
+        return np.array([], dtype=bool)
+    sorted_indices = np.argsort(p_values)
+    sorted_p = p_values[sorted_indices]
+    thresholds = (np.arange(1, n + 1) / n) * fdr_rate
+    passing = sorted_p <= thresholds
+    if not passing.any():
+        return np.zeros(n, dtype=bool)
+    max_k = np.max(np.where(passing))
+    selected = np.zeros(n, dtype=bool)
+    selected[sorted_indices[: max_k + 1]] = True
+    return selected
+
+
+def apply_bh_with_vote_filter(
+    p_values: NDArray,
+    has_votes: NDArray[np.bool_],
+    fdr_rate: float,
+) -> tuple[NDArray[np.bool_], NDArray]:
+    """Apply BH selection only to testable statements (those with votes).
+
+    Statements without votes get selected=False and adjusted_p_value=1.0.
+    This avoids inflating the hypothesis count with noise from Laplace smoothing.
+
+    Args:
+        p_values: Raw p-values for all statements.
+        has_votes: Boolean mask — True if the statement has at least one vote.
+        fdr_rate: False discovery rate for BH procedure.
+
+    Returns:
+        Tuple of (selected_mask, adjusted_p_values) arrays for all statements.
+    """
+    n = len(p_values)
+    selected = np.zeros(n, dtype=bool)
+    adjusted = np.ones(n)
+
+    testable = np.where(has_votes)[0]
+    if len(testable) == 0:
+        return selected, adjusted
+
+    p_testable = p_values[testable]
+    selected[testable] = benjamini_hochberg(p_testable, fdr_rate)
+
+    # BH-adjusted p-values for testable statements.
+    m = len(p_testable)
+    sorted_idx = np.argsort(p_testable)
+    sorted_p = p_testable[sorted_idx]
+    raw_adj = sorted_p * m / np.arange(1, m + 1)
+    cummin = np.minimum.accumulate(raw_adj[::-1])[::-1]
+    adj_testable = np.minimum(cummin, 1.0)
+    reordered = np.empty(m)
+    reordered[sorted_idx] = adj_testable
+    adjusted[testable] = reordered
+
+    return selected, adjusted
+
+
+def is_statement_agree_significant(row: pd.Series, confidence=0.90) -> bool:
+    "Decide whether we should count a statement in a group as being representative."
+    pat, rat = [row[col] for col in ["pat", "rat"]]
+    is_agreement_significant = is_significant(pat, confidence) and is_significant(
+        rat, confidence
+    )
+    return is_agreement_significant
+
+
+def is_statement_disagree_significant(row: pd.Series, confidence=0.90) -> bool:
+    "Decide whether we should count a statement in a group as being representative."
+    pdt, rdt = [row[col] for col in ["pdt", "rdt"]]
+    is_disagreement_significant = is_significant(pdt, confidence) and is_significant(
+        rdt, confidence
+    )
+    return is_disagreement_significant
 
 
 def is_statement_significant(row: pd.Series, confidence=0.90) -> bool:
     "Decide whether we should count a statement in a group as being representative."
-    pat, rat, pdt, rdt = [row[col] for col in ["pat", "rat", "pdt", "rdt"]]
-    is_agreement_significant = is_significant(pat, confidence) and is_significant(
-        rat, confidence
-    )
-    is_disagreement_significant = is_significant(pdt, confidence) and is_significant(
-        rdt, confidence
-    )
+    # Require at least some agree or disagree votes (not just passes)
+    if row["na"] == 0 and row["nd"] == 0:
+        return False
+    is_agreement_significant = is_statement_agree_significant(row, confidence)
+    is_disagreement_significant = is_statement_disagree_significant(row, confidence)
 
     return is_agreement_significant or is_disagreement_significant
+
+
+# DIVERGENCE FROM POLIS: Polis determines repful_for using the higher of
+# ra (agree representativeness ratio) vs rd (disagree representativeness ratio).
+# We instead use significance tests (rat/rdt z-scores) with a confidence
+# threshold, falling back to the raw z-score comparison only when neither
+# direction passes the significance test.
+def get_statement_repful_for(
+    row: pd.Series, confidence=0.90
+) -> Literal["agree", "disagree"]:
+    "Get if statement is significant for agree or disagree."
+    has_repness = "rat" in row and "rdt" in row
+    format_style = "group-repness" if has_repness else "consensus"
+
+    if format_style == "consensus":
+        pat, pdt = [row[col] for col in ["pat", "pdt"]]
+        is_repful_for_agree = pat > pdt
+        repful_for = "agree" if is_repful_for_agree else "disagree"
+        return repful_for
+
+    # now rat and rdt exist
+    agree_sig = is_statement_agree_significant(row, confidence)
+    disagree_sig = is_statement_disagree_significant(row, confidence)
+
+    if agree_sig and disagree_sig:
+        # Both directions significant — pick the stronger one by combined z-score.
+        agree_strength = row["pat"] + row["rat"]
+        disagree_strength = row["pdt"] + row["rdt"]
+        return "agree" if agree_strength >= disagree_strength else "disagree"
+    if agree_sig:
+        return "agree"
+    if disagree_sig:
+        return "disagree"
+    # Fallback: neither significant — compare raw z-scores.
+    rat, rdt = row["rat"], row["rdt"]
+    return "agree" if rat > rdt else "disagree"
 
 
 def beats_best_by_repness_test(
@@ -627,6 +749,102 @@ def select_representative_statements(
         repness[gid] = selected
 
     return repness  # type:ignore
+
+
+def rank_representative_statements(
+    grouped_stats_df: pd.DataFrame,
+    mod_out_statement_ids: list[int] = [],
+    fdr_rate: float = 0.10,
+) -> dict[int, list[RankedRepnessStatement]]:
+    """
+    Ranks ALL statements per group by effect size and marks selections via Benjamini-Hochberg.
+
+    Args:
+        grouped_stats_df (pd.DataFrame): MultiIndex DataFrame of statement statistics, indexed by group and statement.
+        mod_out_statement_ids (list[int]): A list of statements to ignore.
+        fdr_rate (float): False discovery rate for BH procedure.
+
+    Returns:
+        A dict mapping group_id to a list of RankedRepnessStatement, sorted by effect_size descending.
+    """
+    mod_out_mask = grouped_stats_df.index.get_level_values("statement_id").isin(
+        mod_out_statement_ids
+    )
+    grouped_stats_df = grouped_stats_df[~mod_out_mask]  # type: ignore
+
+    result: dict[int, list[RankedRepnessStatement]] = {}
+
+    for gid, group_df in grouped_stats_df.groupby(level="group_id"):
+        group_df = group_df.reset_index()
+
+        # Per-direction p-values: probability test and representativeness test.
+        p_prob_a = z_to_pvalue(group_df["pat"].values)
+        p_rep_a = z_to_pvalue(group_df["rat"].values)
+        p_prob_d = z_to_pvalue(group_df["pdt"].values)
+        p_rep_d = z_to_pvalue(group_df["rdt"].values)
+
+        # Combine probability + representativeness p-values using Simes' method,
+        # which is valid under positive dependence (both tests use the same votes).
+        # For 2 tests: p_simes = min(2 * p_min, p_max).
+        p_simes_a = np.minimum(
+            2 * np.minimum(p_prob_a, p_rep_a), np.maximum(p_prob_a, p_rep_a)
+        )
+        p_simes_d = np.minimum(
+            2 * np.minimum(p_prob_d, p_rep_d), np.maximum(p_prob_d, p_rep_d)
+        )
+
+        # Pick the better direction (lower combined p-value).
+        agree_better = p_simes_a <= p_simes_d
+        p_combined = np.where(agree_better, p_simes_a, p_simes_d)
+        directions = np.where(agree_better, "agree", "disagree")
+
+        # Effect size: ra*pa for agree, rd*pd for disagree.
+        effect_agree = group_df["ra"].values * group_df["pa"].values
+        effect_disagree = group_df["rd"].values * group_df["pd"].values
+        effect_sizes = np.where(agree_better, effect_agree, effect_disagree)
+
+        # Apply BH with zero-vote filter.
+        has_votes = (group_df["na"].values > 0) | (group_df["nd"].values > 0)
+        selected_mask, adjusted = apply_bh_with_vote_filter(
+            p_combined, has_votes, fdr_rate
+        )
+
+        # Rank by effect size descending (1-based).
+        n = len(p_combined)
+        rank_order = np.argsort(-effect_sizes)
+        ranks = np.empty(n, dtype=int)
+        ranks[rank_order] = np.arange(1, n + 1)
+
+        # Build RankedRepnessStatement list, sorted by rank.
+        statements: list[RankedRepnessStatement] = []
+        for idx in rank_order:
+            row = group_df.iloc[idx]
+            statements.append(
+                RankedRepnessStatement(
+                    statement_id=int(row["statement_id"]),
+                    repful_for=directions[idx],
+                    na=int(row["na"]),
+                    nd=int(row["nd"]),
+                    ns=int(row["ns"]),
+                    pa=float(row["pa"]),
+                    pd=float(row["pd"]),
+                    pat=float(row["pat"]),
+                    pdt=float(row["pdt"]),
+                    ra=float(row["ra"]),
+                    rd=float(row["rd"]),
+                    rat=float(row["rat"]),
+                    rdt=float(row["rdt"]),
+                    effect_size=float(effect_sizes[idx]),
+                    p_value=float(p_combined[idx]),
+                    adjusted_p_value=float(adjusted[idx]),
+                    selected=bool(selected_mask[idx]),
+                    rank=int(ranks[idx]),
+                )
+            )
+
+        result[int(gid)] = statements
+
+    return result
 
 
 def populate_priority_calculations_into_statements_df(

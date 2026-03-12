@@ -19,8 +19,9 @@ A <em>DIM</em>ensional <em>RED</em>uction library for reproducing and experiment
 ## Features
 
 - Loads data from any Polis conversation on any Polis server, using only the conversation URL.
-- Reproduces Polis calculation pipeline from only raw vote data.
-  - "Classic" Polis pipeline = PCA dimensional reduction, KMeans clustering, and comment statistics.
+- Two pipeline implementations:
+  - **"Polis" pipeline** = Reproduces the stock Polis calculation pipeline exactly. PCA, KMeans, heuristic statement selection.
+  - **"Agora" pipeline** = Improved statement selection via [Benjamini-Hochberg][bh-wiki] FDR control, effective agreement group-aware consensus, and [Simes'][simes-wiki] p-value combination.
 - Alternative algorithms, aspiring for sensible defaults:
   - dimensional reduction: [PaCMAP & LocalMAP][pacmap]
     - Planned: [UMAP][umap], [TriMap][trimap], [PHATE][], [ivis][ivis], [LargeVis][largevis]
@@ -28,6 +29,23 @@ A <em>DIM</em>ensional <em>RED</em>uction library for reproducing and experiment
     - Planned: [EVOC][evoc]
 - Helpful visualizations via `matplotlib`
   - Planned: [Plotly][plotly]
+
+## Polis vs Agora
+
+Both pipelines share the same core (PCA + KMeans by default). The difference is in **statement selection** and **consensus scoring**:
+
+| Feature | Polis | Agora |
+|---------|-------|-------|
+| **Statement selection** | Heuristic `pick_max=5` per group | Benjamini-Hochberg FDR control (adaptive, data-driven) |
+| **P-value combination** | z-score thresholds | Simes' method (valid under positive dependence) |
+| **Group-aware consensus** | `prod(pa)^(1/n)` (raw agreement) | `prod(pa*(1-pd))^(1/n)` (penalizes divided groups) |
+| **Zero-vote handling** | Included in hypothesis testing | Excluded from BH hypothesis count |
+| **Output** | Only top-N selected statements | ALL statements ranked with selection flags |
+
+- **Polis**: Always matches upstream Polis behavior. Good for verification and comparison.
+- **Agora** _(recommended)_: Adds statistical rigor and fixes known issues. Recommended for production use.
+
+Agora roadmap: cleaner input/output APIs, improved default algorithms, reduced DataFrame complexity, and richer outputs.
 
 ## Goals
 
@@ -44,10 +62,10 @@ For now, see [this related issue](https://github.com/patcon/red-dwarf/issues/4)
 ## Sponsors
 
 <p>
-  <a href="https://agoracitizen.network" rel="noopener sponsored" target="_blank"><img width="167" src="https://agoracitizen.network/images/big_logo_agora.png" alt="Agora Citizen Network" title="Where citizens converge to exchange and debate ideas" loading="lazy" /></a>
+  <a href="https://www.agoracitizen.network" rel="noopener sponsored" target="_blank"><img width="167" src="https://www.agoracitizen.network/images/big_logo_agora.png" alt="Agora Citizen Network" title="Where citizens converge to exchange and debate ideas" loading="lazy" /></a>
 </p>
 
-Red Dwarf is generously sponsored by [ZKorum SAS](https://zkorum.com), creators of the [Agora Citizen Network](https://agoracitizen.network).
+Red Dwarf is generously sponsored by [ZKorum SAS](https://zkorum.com), creators of the [Agora Citizen Network](https://www.agoracitizen.network).
 
 Are you or your organization eager to see more platforms and community built around democracy-supporting algorithms like these? **Please consider [getting in touch on Discord](#get-involved) and supporting our continued work!** (ping @patcon)
 
@@ -71,16 +89,18 @@ pip install red-dwarf[all]
 # pip install red-dwarf[alt-algos,plots]
 ```
 
-See [`docs/notebooks/polis-implementation-demo.ipynb`][notebook] or [`docs/notebooks/`][notebooks] for other examples.
+See [`docs/notebooks/agora-demo.ipynb`][agora-notebook] for the recommended quickstart using the Agora pipeline.
 
+For reproducing stock Polis results exactly, see [`docs/notebooks/polis-implementation-demo.ipynb`][polis-notebook].
 
 | screenshot of library-generated notebook | screenshot of Polis-generated report |
 |---|---|
-| [![screen of the sample jupyter notebook](docs/notebook-screenshot.png)][notebook] | ![screenshot of the polis report](https://imgur.com/blkIEtW.png) |
+| [![screen of the sample jupyter notebook](docs/notebook-screenshot.png)][polis-notebook] | ![screenshot of the polis report](https://imgur.com/blkIEtW.png) |
 
+- [`docs/notebooks/agora-demo.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/agora-demo.ipynb) — Agora pipeline quickstart _(recommended)_
+- [`docs/notebooks/polis-implementation-demo.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/polis-implementation-demo.ipynb) — Classic Polis pipeline baseline
 - [`docs/notebooks/loading-data.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/loading-data.ipynb)
 - [`docs/notebooks/heatmap.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/heatmap.ipynb)
-- [`docs/notebooks/polis-implementation-demo.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/polis-implementation-demo.ipynb)
 - [`docs/notebooks/dump-downloaded-polis-data.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/dump-downloaded-polis-data.ipynb)
 - Advanced
    - [`docs/notebooks/map-xids.ipynb`](https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/map-xids.ipynb)
@@ -125,6 +145,9 @@ See [`CHANGELOG.md`][changelog].
    [pypi]: https://pypi.org/project/red-dwarf/
    [stellarpunk]: https://www.youtube.com/watch?v=opnkQVZrhAw
 
+   [bh-wiki]: https://en.wikipedia.org/wiki/False_discovery_rate#Benjamini%E2%80%93Hochberg_procedure
+   [simes-wiki]: https://en.wikipedia.org/wiki/Simes%27_test
+
    [pacmap]: https://github.com/YingfanWang/PaCMAP
    [umap]: https://github.com/lmcinnes/umap
    [trimap]: https://github.com/eamid/trimap
@@ -137,10 +160,11 @@ See [`CHANGELOG.md`][changelog].
 
    [plotly]: https://plotly.com/python/
 
-   [notebook]: https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/polis-implementation-demo.ipynb
+   [agora-notebook]: https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/agora-demo.ipynb
+   [polis-notebook]: https://github.com/polis-community/red-dwarf/blob/main/docs/notebooks/polis-implementation-demo.ipynb
    [notebooks]: https://github.com/polis-community/red-dwarf/tree/main/docs/notebooks/
    [ZKorum]: https://github.com/zkorum
-   [agora]: https://agoracitizen.network/
+   [agora]: https://www.agoracitizen.network/
    [ngi-funding]: https://trustchain.ngi.eu/zkorum/
    [MPLv2]: https://choosealicense.com/licenses/mpl-2.0/
    [license]: https://github.com/polis-community/red-dwarf/blob/main/LICENSE

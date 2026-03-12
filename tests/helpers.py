@@ -236,6 +236,25 @@ def polis_gac_to_geometric_mean(n_groups, polis_gac):
     }
 
 
+def compute_expected_gac(grouped_stats_df, statement_ids, n_groups):
+    """
+    Compute expected group-aware consensus using effective agreement formula.
+
+    Uses: prod(pa * (1 - pd))^(1/n_groups) per statement across all groups.
+    This matches the DIVERGENCE FROM POLIS in calculate_comment_statistics.
+    """
+    import pandas as pd
+    expected = {}
+    for statement_id in statement_ids:
+        effective_agree_product = 1.0
+        for gid in range(n_groups):
+            pa = grouped_stats_df.loc[(gid, statement_id), "pa"]
+            pd_val = grouped_stats_df.loc[(gid, statement_id), "pd"]
+            effective_agree_product *= pa * (1 - pd_val)
+        expected[statement_id] = effective_agree_product ** (1.0 / n_groups)
+    return expected
+
+
 class ReportType(Enum):
     SUMMARY = "summary"
     VOTES = "votes"

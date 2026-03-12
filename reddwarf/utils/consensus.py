@@ -1,11 +1,16 @@
+import numpy as np
 import pandas as pd
 from typing import List, TypedDict
 from reddwarf.utils.matrix import VoteMatrix
+from reddwarf.types.agora import RankedConsensusStatement, RankedConsensusResult
 from reddwarf.utils.stats import (
+    apply_bh_with_vote_filter,
+    benjamini_hochberg,
     calculate_comment_statistics,
     format_comment_stats,
     is_significant,
     votes,
+    z_to_pvalue,
 )
 
 
@@ -131,3 +136,90 @@ def select_consensus_statements(
         "agree": top_agree,
         "disagree": top_disagree,
     }
+
+
+def rank_consensus_statements(
+    vote_matrix: VoteMatrix,
+    mod_out_statement_ids: list[int] = [],
+    fdr_rate: float = 0.10,
+) -> RankedConsensusResult:
+    """
+    Ranks ALL statements by consensus strength and marks selections via Benjamini-Hochberg.
+
+    Args:
+        vote_matrix (VoteMatrix): The full raw vote matrix.
+        mod_out_statement_ids (list[int]): Statements to ignore.
+        fdr_rate (float): False discovery rate for BH procedure.
+
+    Returns:
+        RankedConsensusResult with agree and disagree lists, each containing all statements
+        ranked by effect size (pa or pd) with BH selection flags.
+    """
+    N_g_c, N_v_g_c, P_v_g_c, _, P_v_g_c_test, *_ = calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=None,
+    )
+    MOCK_GID = 0
+    df = pd.DataFrame(
+        {
+            "na": N_v_g_c[votes.A, MOCK_GID, :],
+            "nd": N_v_g_c[votes.D, MOCK_GID, :],
+            "ns": N_g_c[MOCK_GID, :],
+            "pa": P_v_g_c[votes.A, MOCK_GID, :],
+            "pd": P_v_g_c[votes.D, MOCK_GID, :],
+            "pat": P_v_g_c_test[votes.A, MOCK_GID, :],
+            "pdt": P_v_g_c_test[votes.D, MOCK_GID, :],
+        },
+        index=vote_matrix.columns,
+    )
+
+    if mod_out_statement_ids:
+        df = df[~df.index.isin(mod_out_statement_ids)]
+
+    def _rank_direction(
+        df: pd.DataFrame,
+        z_col: str,
+        effect_col: str,
+        direction: str,
+    ) -> list[RankedConsensusStatement]:
+        p_values = z_to_pvalue(df[z_col].values)
+        effect_sizes = df[effect_col].values
+
+        has_votes = (df["na"].values > 0) | (df["nd"].values > 0)
+        selected_mask, adjusted = apply_bh_with_vote_filter(
+            np.asarray(p_values), has_votes, fdr_rate
+        )
+
+        # Rank by effect size descending.
+        n = len(effect_sizes)
+        rank_order = np.argsort(-effect_sizes)
+        ranks = np.empty(n, dtype=int)
+        ranks[rank_order] = np.arange(1, n + 1)
+
+        statements: list[RankedConsensusStatement] = []
+        for idx in rank_order:
+            row = df.iloc[idx]
+            statements.append(
+                RankedConsensusStatement(
+                    statement_id=int(df.index[idx]),
+                    direction=direction,
+                    na=int(row["na"]),
+                    nd=int(row["nd"]),
+                    ns=int(row["ns"]),
+                    pa=float(row["pa"]),
+                    pd=float(row["pd"]),
+                    pat=float(row["pat"]),
+                    pdt=float(row["pdt"]),
+                    effect_size=float(effect_sizes[idx]),
+                    p_value=float(p_values[idx]),
+                    adjusted_p_value=float(adjusted[idx]),
+                    selected=bool(selected_mask[idx]),
+                    rank=int(ranks[idx]),
+                )
+            )
+        return statements
+
+    agree_ranked = _rank_direction(df, "pat", "pa", "agree")
+    disagree_ranked = _rank_direction(df, "pdt", "pd", "disagree")
+
+    return RankedConsensusResult(agree=agree_ranked, disagree=disagree_ranked)

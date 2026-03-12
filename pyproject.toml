@@ -33,7 +33,7 @@ requests-cache = { git = "https://github.com/requests-cache/requests-cache", rev
 
 [project.optional-dependencies]
 alt-algos = [
-    "pacmap>=0.7.0",
+    "pacmap>=0.9.1",
 
     # Use older numba on macOS Intel (avoids build issues)
     # See: https://github.com/numba/llvmlite/issues/1389#issuecomment-3763361889
@@ -54,6 +54,7 @@ all = [
 ]
 dev = [
     "coverage>=6.0",
+    "cram>=0.7",
     "ipywidgets>=8.0.0",
     "mkdocs-same-dir>=0.1.3",
     "mkdocstrings-python>=1.8.0",
@@ -64,7 +65,7 @@ dev = [
 
 [dependency-groups]
 alt-algos = [
-    "pacmap>=0.7.0",
+    "pacmap>=0.9.1",
     "hdbscan>=0.8.40",
 ]
 plots = [
@@ -78,6 +79,7 @@ all = [
 ]
 dev = [
     "coverage>=6.0",
+    "cram>=0.7",
     "ipywidgets>=8.0.0",
     "mkdocs-same-dir>=0.1.3",
     "mkdocstrings-python>=1.8.0",
