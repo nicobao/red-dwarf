@@ -311,12 +311,6 @@ def test_priority_metric_array():
 
 @pytest.mark.parametrize("polis_convo_data", ["small-no-meta", "small-with-meta", "medium-no-meta", "medium-with-meta"], indirect=True)
 def test_group_aware_consensus_real_data(polis_convo_data):
-    """
-    Verify group-aware consensus on real Polis data.
-
-    Tests both the Polis-compatible baseline (geometric mean of raw p_agree)
-    and our effective agreement divergence (p_agree * (1 - p_disagree)).
-    """
     fixture = polis_convo_data
     loader = Loader(filepaths=[
         f'{fixture.data_dir}/votes.json',
@@ -339,34 +333,20 @@ def test_group_aware_consensus_real_data(polis_convo_data):
     all_clustered_participant_ids, cluster_labels = polismath.extract_data_from_polismath(fixture.math_data)
     vote_matrix = vote_matrix.loc[all_clustered_participant_ids, :]
 
-    # Generate stats for all groups and all statements.
-    # This returns both per-group probabilities (P_v_g_c) and
-    # the final group-aware consensus (C_v_c) which uses effective agreement.
-    N_g_c, N_v_g_c, P_v_g_c, _, P_v_g_c_test, _, C_v_c = stats.calculate_comment_statistics(
+    # Generate stats all groups and all statements.
+    _, gac_df = stats.calculate_comment_statistics_dataframes(
         vote_matrix=vote_matrix,
         cluster_labels=cluster_labels,
     )
 
-    n_groups = len(set(cluster_labels))
-
-    # 1) Verify Polis baseline: geometric mean of raw p_agree still matches fixtures
-    polis_baseline_agree = P_v_g_c[stats.votes.A, :, :].prod(axis=0) ** (1.0 / n_groups)
-    calculated_baseline = {
-        str(sid): float(polis_baseline_agree[i])
-        for i, sid in enumerate(vote_matrix.columns)
+    calculated_gac = {
+        str(pid): float(row.iloc[0])
+        for pid, row in gac_df.iterrows()
     }
-    expected_polis_gac = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
-    assert calculated_baseline == pytest.approx(expected_polis_gac)
 
-    # 2) Verify effective agreement scores are in [0, 1] and <= Polis baseline
-    for i, sid in enumerate(vote_matrix.columns):
-        effective_score = float(C_v_c[stats.votes.A, i])
-        baseline_score = float(polis_baseline_agree[i])
-        assert 0 <= effective_score <= 1, f"Statement {sid}: score {effective_score} out of [0, 1]"
-        assert effective_score <= baseline_score + 1e-9, (
-            f"Statement {sid}: effective agreement {effective_score} should be "
-            f"<= Polis baseline {baseline_score}"
-        )
+    n_groups = len(set(cluster_labels))
+    expected_gac = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
+    assert calculated_gac == pytest.approx(expected_gac)
 
 
 def test_group_aware_consensus_uses_geometric_mean():
@@ -397,57 +377,14 @@ def test_group_aware_consensus_uses_geometric_mean():
     agree_score_2_groups = C_2[0, 0]  # votes.A = 0
     agree_score_3_groups = C_3[0, 0]
 
-    # With geometric mean, both should be reasonably close (same underlying consensus).
-    # Without it (raw product), 3 groups would give much lower scores.
-    # The effective agreement formula (p_agree * (1 - p_disagree)) amplifies
-    # the Laplace smoothing gap between group sizes, so the tolerance is wider
-    # than with raw p_agree alone.
-    assert agree_score_2_groups == pytest.approx(agree_score_3_groups, abs=0.1)
+    # With geometric mean, both should be close (same underlying consensus).
+    # Without it (raw product), 3 groups would give 0.512 vs 0.640 — much wider gap.
+    # Small difference remains due to Laplace smoothing on smaller groups.
+    assert agree_score_2_groups == pytest.approx(agree_score_3_groups, abs=0.06)
 
-    # Both should be above 0.5 (all participants agree)
+    # Both should be well above 0.5 (all participants agree)
     assert agree_score_2_groups > 0.5
     assert agree_score_3_groups > 0.5
-
-
-def test_group_aware_consensus_penalizes_divided_groups():
-    """
-    Verify that a group split roughly evenly between agree and disagree
-    drags down the consensus score compared to unanimous agreement.
-
-    This is the core behavior of the effective agreement divergence from Polis.
-    """
-    # 2 groups of 5 participants, 1 statement.
-    # Group 0: all agree. Group 1: split 3 agree / 2 disagree.
-    vote_matrix_divided = pd.DataFrame(
-        {0: [1, 1, 1, 1, 1, 1, 1, 1, -1, -1]},
-        index=list(range(10)),
-    )
-    cluster_labels = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
-
-    # Unanimous: both groups fully agree
-    vote_matrix_unanimous = pd.DataFrame(
-        {0: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]},
-        index=list(range(10)),
-    )
-
-    *_, C_divided = stats.calculate_comment_statistics(
-        vote_matrix=vote_matrix_divided,
-        cluster_labels=cluster_labels,
-    )
-    *_, C_unanimous = stats.calculate_comment_statistics(
-        vote_matrix=vote_matrix_unanimous,
-        cluster_labels=cluster_labels,
-    )
-
-    divided_score = C_divided[stats.votes.A, 0]
-    unanimous_score = C_unanimous[stats.votes.A, 0]
-
-    # Divided group should significantly lower the consensus score
-    assert divided_score < unanimous_score
-    # A group split 3/2 should produce a score below 0.5 (not genuine consensus)
-    assert divided_score < 0.5
-    # Unanimous agreement should be well above 0.5
-    assert unanimous_score > 0.5
 
 
 def test_format_comment_stats_repful_agree():

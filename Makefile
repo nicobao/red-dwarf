@@ -35,7 +35,13 @@ test-debug: ## Run tests via pytest, optionally filtering (with verbose debuggin
 	# Show full diffs on failure.
 	$(UV_RUN) pytest -p no:nbmake --capture=no -vv -k '$(TEST_FILTER)'
 
-test-all: test test-nb docs-build ## Run unit and notebook tests
+test-cram: ## Run cram snapshot tests
+	$(UV_RUN) cram tests/cram/*.t
+
+test-cram-update: ## Update cram snapshot tests (interactive)
+	$(UV_RUN) cram -i tests/cram/*.t
+
+test-all: test test-nb test-cram docs-build ## Run unit, notebook, and cram tests
 
 # Small hint to remove gitignore'd python version file, which can confuse usage of uv.
 clean:
