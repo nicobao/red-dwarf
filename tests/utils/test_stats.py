@@ -337,6 +337,7 @@ def test_group_aware_consensus_real_data(polis_convo_data):
     _, gac_df = stats.calculate_comment_statistics_dataframes(
         vote_matrix=vote_matrix,
         cluster_labels=cluster_labels,
+        consensus_mode="legacy",
     )
 
     calculated_gac = {
@@ -344,8 +345,7 @@ def test_group_aware_consensus_real_data(polis_convo_data):
         for pid, row in gac_df.iterrows()
     }
 
-    n_groups = len(set(cluster_labels))
-    expected_gac = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
+    expected_gac = fixture.math_data["group-aware-consensus"]
     assert calculated_gac == pytest.approx(expected_gac)
 
 
@@ -378,9 +378,9 @@ def test_group_aware_consensus_uses_geometric_mean():
     agree_score_3_groups = C_3[0, 0]
 
     # With geometric mean, both should be close (same underlying consensus).
-    # Without it (raw product), 3 groups would give 0.512 vs 0.640 — much wider gap.
-    # Small difference remains due to Laplace smoothing on smaller groups.
-    assert agree_score_2_groups == pytest.approx(agree_score_3_groups, abs=0.06)
+    # Without it (raw product), 3 groups would give a much wider gap.
+    # Small difference remains due to smoothing on smaller groups.
+    assert agree_score_2_groups == pytest.approx(agree_score_3_groups, abs=0.08)
 
     # Both should be well above 0.5 (all participants agree)
     assert agree_score_2_groups > 0.5
@@ -466,3 +466,102 @@ def test_format_comment_stats_consensus_disagree():
         "p-test": 2.3,
         "cons-for": "disagree",
     }
+
+
+def test_consensus_standard_small_group_unanimous():
+    """Standard mode: two groups both unanimously agree → consensus > 0.6"""
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4],
+    )
+    cluster_labels = [0, 0, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="standard",
+    )
+
+    agree_consensus = C_v_c[stats.votes.A, 0]
+    assert agree_consensus > 0.6
+
+
+def test_consensus_standard_divided_group():
+    """Standard mode: one group divided (3/5 agree) → consensus < 0.6"""
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, -1, -1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4, 5, 6, 7],
+    )
+    # Group 0: 3 agree, 2 disagree. Group 1: 3 agree, 0 disagree.
+    cluster_labels = [0, 0, 0, 0, 0, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="standard",
+    )
+
+    agree_consensus = C_v_c[stats.votes.A, 0]
+    assert agree_consensus < 0.6
+
+
+def test_consensus_standard_strongly_disputed():
+    """Standard mode: one group all agree, other all disagree → consensus very low"""
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, -1, -1, -1]},
+        index=[0, 1, 2, 3, 4, 5],
+    )
+    cluster_labels = [0, 0, 0, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="standard",
+    )
+
+    agree_consensus = C_v_c[stats.votes.A, 0]
+    # With Jeffreys prior on small groups, value is ~0.11 rather than near-zero
+    assert agree_consensus < 0.15
+
+
+def test_consensus_legacy_uses_raw_product():
+    """Legacy mode should use raw product (not geometric mean)."""
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4, 5],
+    )
+    cluster_labels = [0, 0, 0, 1, 1, 1]
+
+    _, _, P_v_g_c, _, _, _, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="legacy",
+    )
+
+    # Legacy: raw product of per-group probabilities (no geometric mean)
+    expected_agree = P_v_g_c[stats.votes.A, :, 0].prod()
+    assert C_v_c[stats.votes.A, 0] == pytest.approx(expected_agree)
+
+
+def test_consensus_standard_representativeness_uses_laplace():
+    """consensus_mode only affects consensus, not representativeness (which always uses Laplace)."""
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, -1, -1, -1]},
+        index=[0, 1, 2, 3, 4, 5],
+    )
+    cluster_labels = [0, 0, 0, 1, 1, 1]
+
+    _, _, P_v_g_c_standard, R_v_g_c_standard, *_ = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="standard",
+    )
+    _, _, P_v_g_c_legacy, R_v_g_c_legacy, *_ = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_mode="legacy",
+    )
+
+    # Representativeness probabilities (P_v_g_c) and ratios (R_v_g_c) should be identical
+    np.testing.assert_array_equal(P_v_g_c_standard, P_v_g_c_legacy)
+    np.testing.assert_array_equal(R_v_g_c_standard, R_v_g_c_legacy)

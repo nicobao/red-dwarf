@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Literal
 from dataclasses import dataclass
 import pandas as pd
 from pandas import DataFrame
@@ -68,6 +68,7 @@ def run_pipeline(
     random_state: Optional[int] = None,
     pick_max: int = 5,
     confidence: float = 0.9,
+    consensus_mode: Literal["standard", "legacy"] = "standard",
 ) -> PolisClusteringResult:
     """
     An essentially feature-complete implementation of the Polis clustering algorithm.
@@ -150,6 +151,7 @@ def run_pipeline(
     grouped_stats_df, gac_df = calculate_comment_statistics_dataframes(
         vote_matrix=raw_vote_matrix.loc[participant_ids_to_cluster, :],
         cluster_labels=cluster_labels,
+        consensus_mode=consensus_mode,
     )
 
     def get_with_default(lst, idx, default=None):

@@ -11,6 +11,7 @@ def run_pipeline(**kwargs) -> base.PolisClusteringResult:
     kwargs = {
         "reducer": "pca",
         "clusterer": "kmeans",
+        "consensus_mode": "legacy",
         **kwargs,
     }
     return base.run_pipeline(**kwargs)

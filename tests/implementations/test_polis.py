@@ -64,11 +64,10 @@ def test_run_clustering_real_data_small(polis_convo_data):
     )
 
     # Check group-aware-consensus calculations.
-    n_groups = len(math_data["group-clusters"])
     calculated = helpers.simulate_api_response(
         result.statements_df["group-aware-consensus"].items()
     )
-    expected = helpers.polis_gac_to_geometric_mean(n_groups, math_data["group-aware-consensus"])
+    expected = math_data["group-aware-consensus"]
     assert_dict_equal(calculated, expected)
 
     # Check PCA components and means
