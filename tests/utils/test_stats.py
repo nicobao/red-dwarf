@@ -444,10 +444,147 @@ def test_group_aware_consensus_penalizes_divided_groups():
 
     # Divided group should significantly lower the consensus score
     assert divided_score < unanimous_score
-    # A group split 3/2 should produce a score below 0.5 (not genuine consensus)
-    assert divided_score < 0.5
-    # Unanimous agreement should be well above 0.5
-    assert unanimous_score > 0.5
+    # A group split 3/2 should produce a score below the 0.6 consensus threshold
+    assert divided_score < 0.6
+    # Unanimous agreement should be well above 0.6
+    assert unanimous_score > 0.6
+
+
+def test_consensus_small_group_unanimous():
+    """
+    A group of 2 with unanimous agreement should produce consensus > 0.6.
+
+    With Laplace smoothing (pseudo_count=1), a group of 2 all-agree gets
+    effective_agree ~0.562, falling below the 0.6 frontend threshold.
+    With Jeffreys prior (pseudo_count=0.5), it gets ~0.694, above threshold.
+    """
+    # 2 groups: group 0 has 2 members, group 1 has 3 members. All agree.
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4],
+    )
+    cluster_labels = [0, 0, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+    )
+
+    consensus_agree = C_v_c[stats.votes.A, 0]
+
+    # With Jeffreys prior, consensus should be well above 0.6
+    assert consensus_agree > 0.6, (
+        f"Small unanimous groups should produce consensus > 0.6, got {consensus_agree:.4f}"
+    )
+    # Specific expected value: ~0.729
+    assert consensus_agree == pytest.approx(0.729, abs=0.01)
+
+
+def test_consensus_small_group_unanimous_with_laplace():
+    """
+    Verify that passing pseudo_count=1 (Laplace) for consensus produces lower scores
+    than the default Jeffreys prior, confirming the parameter works.
+    """
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4],
+    )
+    cluster_labels = [0, 0, 1, 1, 1]
+
+    *_, C_jeffreys = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+    )
+    *_, C_laplace = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+        consensus_pseudo_count=1.0,
+    )
+
+    jeffreys_score = C_jeffreys[stats.votes.A, 0]
+    laplace_score = C_laplace[stats.votes.A, 0]
+
+    # Jeffreys should give higher consensus for unanimous small groups
+    assert jeffreys_score > laplace_score
+    # Laplace score should be ~0.600 (barely at the threshold)
+    assert laplace_score == pytest.approx(0.600, abs=0.01)
+
+
+def test_consensus_divided_group_detected():
+    """
+    A group genuinely divided (3/5 agree, 2/5 disagree) should produce
+    consensus below 0.6 even with Jeffreys prior.
+
+    This verifies the effective agreement formula still detects division.
+    """
+    # Group 0: 5 members all agree. Group 1: 5 members, 3 agree / 2 disagree.
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1, 1, 1, 1, -1, -1]},
+        index=list(range(10)),
+    )
+    cluster_labels = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+    )
+
+    consensus_agree = C_v_c[stats.votes.A, 0]
+
+    # Divided group should drag consensus below 0.6
+    assert consensus_agree < 0.6, (
+        f"Divided group (3/5 agree) should produce consensus < 0.6, got {consensus_agree:.4f}"
+    )
+    # Specific expected value: ~0.535
+    assert consensus_agree == pytest.approx(0.535, abs=0.01)
+
+
+def test_consensus_strongly_disputed():
+    """
+    One group all-agree vs one group all-disagree should produce very low consensus.
+    """
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1, -1, -1, -1, -1, -1]},
+        index=list(range(10)),
+    )
+    cluster_labels = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+    *_, C_v_c = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+    )
+
+    consensus_agree = C_v_c[stats.votes.A, 0]
+
+    # Strongly disputed should produce very low consensus
+    assert consensus_agree < 0.1, (
+        f"Strongly disputed statement should have consensus < 0.1, got {consensus_agree:.4f}"
+    )
+
+
+def test_consensus_representativeness_uses_laplace():
+    """
+    Verify that the Jeffreys prior only affects consensus, not representativeness.
+    P_v_g_c (used for representativeness ratios) should still use pseudo_count=1.
+    """
+    vote_matrix = pd.DataFrame(
+        {0: [1, 1, 1, 1, 1]},
+        index=[0, 1, 2, 3, 4],
+    )
+    cluster_labels = [0, 0, 1, 1, 1]
+
+    _, _, P_v_g_c, _, _, _, _ = stats.calculate_comment_statistics(
+        vote_matrix=vote_matrix,
+        cluster_labels=cluster_labels,
+    )
+
+    # Group 0 has 2 members, all agree.
+    # With Laplace (pseudo_count=1): P_agree = (1+2)/(2+2) = 0.75
+    p_agree_group0 = P_v_g_c[stats.votes.A, 0, 0]
+    assert p_agree_group0 == pytest.approx(0.75, abs=0.001), (
+        f"Representativeness probabilities should use Laplace (pseudo_count=1), "
+        f"got P_agree={p_agree_group0:.4f} instead of 0.75"
+    )
 
 
 def test_format_comment_stats_repful_agree():

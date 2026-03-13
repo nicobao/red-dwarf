@@ -222,6 +222,7 @@ def calculate_comment_statistics(
     vote_matrix: VoteMatrix,
     cluster_labels: Optional[list[int] | NDArray[np.integer]] = None,
     pseudo_count: int = 1,
+    consensus_pseudo_count: float = 0.5,
 ) -> Tuple[
     np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
 ]:
@@ -361,9 +362,27 @@ def calculate_comment_statistics(
     # p_agree * (1 - p_disagree), which discounts each group's agreement
     # by its disagreement so a divided group naturally drags down the
     # consensus score.
+    #
+    # DIVERGENCE #3 FROM POLIS (Jeffreys prior for consensus):
+    # The representativeness calculations use Laplace smoothing (pseudo_count=1)
+    # which works well for ratios. But for the consensus geometric mean, Laplace
+    # is too aggressive on small groups — it pulls probabilities toward 0.5,
+    # making small unanimous groups look artificially uncertain (e.g., a group
+    # of 2 with all-agree only gets effective_agree ~0.56, below a 0.6 threshold).
+    # We use the Jeffreys prior (pseudo_count=0.5), the standard minimally-
+    # informative Bayesian prior for proportions, specifically for consensus.
     n_groups = P_v_g_c.shape[1]
-    effective_agree = P_v_g_c[votes.A, :, :] * (1 - P_v_g_c[votes.D, :, :])
-    effective_disagree = P_v_g_c[votes.D, :, :] * (1 - P_v_g_c[votes.A, :, :])
+    P_agree_consensus = np.empty([group_count, len(statement_ids)])
+    P_disagree_consensus = np.empty([group_count, len(statement_ids)])
+    for gid in range(group_count):
+        P_agree_consensus[gid, :] = probability(
+            N_v_g_c[votes.A, gid, :], N_g_c[gid, :], consensus_pseudo_count
+        )
+        P_disagree_consensus[gid, :] = probability(
+            N_v_g_c[votes.D, gid, :], N_g_c[gid, :], consensus_pseudo_count
+        )
+    effective_agree = P_agree_consensus * (1 - P_disagree_consensus)
+    effective_disagree = P_disagree_consensus * (1 - P_agree_consensus)
     C_v_c[votes.A, :] = effective_agree.prod(axis=0) ** (1.0 / n_groups)
     C_v_c[votes.D, :] = effective_disagree.prod(axis=0) ** (1.0 / n_groups)
 
@@ -438,6 +457,7 @@ def calculate_comment_statistics_dataframes(
     vote_matrix: VoteMatrix,
     cluster_labels: Optional[list[int] | NDArray[np.integer]] = None,
     pseudo_count: int = 1,
+    consensus_pseudo_count: float = 0.5,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Calculates comparative statement statistics across all votes and groups, generating dataframes.
@@ -449,6 +469,7 @@ def calculate_comment_statistics_dataframes(
                                   and values are votes (1 for agree, -1 for disagree, 0 for pass).
         cluster_labels (np.ndarray): Array of cluster labels for each participant row in the vote matrix.
         pseudo_count (int): Smoothing parameter to avoid division by zero. Default is 1.
+        consensus_pseudo_count (float): Smoothing for consensus calculation. Default is 0.5 (Jeffreys prior).
 
     Returns:
         pd.DataFrame: DataFrame (MultiIndex on group/statement) containing verbose statistics for each statement per group.
@@ -459,6 +480,7 @@ def calculate_comment_statistics_dataframes(
             vote_matrix=vote_matrix,
             cluster_labels=cluster_labels,
             pseudo_count=pseudo_count,
+            consensus_pseudo_count=consensus_pseudo_count,
         )
     )
 
