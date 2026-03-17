@@ -1,8 +1,30 @@
 import pytest
+import numpy as np
 from reddwarf.utils.clusterer.kmeans import run_kmeans, find_best_kmeans
 from tests.fixtures import polis_convo_data
 from tests.helpers import transform_base_clusters_to_participant_coords
 import pandas as pd
+
+
+def test_find_best_kmeans_rejects_singleton_clusters():
+    """find_best_kmeans should never select a k that produces a singleton cluster."""
+    np.random.seed(42)
+    cluster1 = np.random.normal(loc=[0, 0], scale=0.3, size=(30, 2))
+    cluster2 = np.random.normal(loc=[5, 5], scale=0.3, size=(30, 2))
+    outlier = np.array([[10, 10]])
+    X = np.vstack([cluster1, cluster2, outlier])
+
+    best_k, _, best_kmeans = find_best_kmeans(
+        X_to_cluster=X,
+        k_bounds=[2, 5],
+        random_state=42,
+    )
+
+    if best_kmeans is not None:
+        unique, counts = np.unique(best_kmeans.labels_, return_counts=True)
+        assert counts.min() >= 2, (
+            f"k={best_k} produced singleton cluster(s): {dict(zip(unique, counts))}"
+        )
 
 @pytest.mark.parametrize("polis_convo_data", ["small"], indirect=True)
 def test_run_kmeans_real_data_reproducible(polis_convo_data):
