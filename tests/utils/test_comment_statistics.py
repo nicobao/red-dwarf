@@ -11,7 +11,7 @@ from reddwarf.data_loader import Loader
 from reddwarf.types.polis import PolisRepness
 
 
-def setup_test(fixture):
+def setup_test(fixture, consensus_mode="standard"):
     loader = Loader(
         filepaths=[
             f"{fixture.data_dir}/votes.json",
@@ -22,13 +22,6 @@ def setup_test(fixture):
     VOTES = loader.votes_data
 
     raw_vote_matrix = matrix.generate_raw_matrix(votes=VOTES)
-    # We don't actuall need this outside PCA?
-    # STATEMENTS = loader.comments_data
-    # _, _, mod_out, _ = stmnts.process_statements(statement_data=STATEMENTS)
-    # filtered_vote_matrix = matrix.simple_filter_matrix(
-    #     vote_matrix=raw_vote_matrix,
-    #     mod_out_statement_ids=mod_out,
-    # )
 
     # Get list of all active participant ids, since Polis has some edge-cases
     # that keep specific participants, and we need to keep them from being filtered out.
@@ -40,6 +33,7 @@ def setup_test(fixture):
     grouped_stats_df, gac_df = stats.calculate_comment_statistics_dataframes(
         vote_matrix=raw_vote_matrix.loc[all_clustered_participant_ids, :],
         cluster_labels=cluster_labels,
+        consensus_mode=consensus_mode,
     )
 
     return grouped_stats_df, gac_df
@@ -114,13 +108,10 @@ def test_calculate_comment_statistics_dataframes_grouped_stats_df_real_data(
 )
 def test_calculate_comment_statistics_dataframes_gac_df_real_data(polis_convo_data):
     fixture = polis_convo_data
-    _, gac_df = setup_test(fixture)
-
-    _, cluster_labels = polismath.extract_data_from_polismath(fixture.math_data)
-    n_groups = len(set(cluster_labels))
+    _, gac_df = setup_test(fixture, consensus_mode="legacy")
 
     calculated = helpers.simulate_api_response(gac_df["group-aware-consensus"].items())
-    expected = helpers.polis_gac_to_geometric_mean(n_groups, fixture.math_data["group-aware-consensus"])
+    expected = fixture.math_data["group-aware-consensus"]
     assert_dict_equal(calculated, expected)
 
 

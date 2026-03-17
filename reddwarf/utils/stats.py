@@ -295,6 +295,7 @@ def calculate_comment_statistics(
     vote_matrix: VoteMatrix,
     cluster_labels: Optional[list[int] | NDArray[np.integer]] = None,
     pseudo_count: int = 1,
+    consensus_mode: Literal["standard", "legacy"] = "standard",
 ) -> Tuple[
     np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
 ]:
@@ -416,14 +417,24 @@ def calculate_comment_statistics(
         )  # rdt
 
     # Calculate group-aware consensus
-    # Geometric mean: normalize for group count so that similar levels of
-    # cross-group consensus produce similar scores regardless of whether
-    # the conversation has 2 or 6 opinion groups. This helps when applying
-    # a selection algorithm with a fixed threshold (e.g. 0.5).
     # Reference: https://github.com/compdemocracy/polis/blob/edge/math/src/polismath/math/conversation.clj#L615-L636
     n_groups = P_v_g_c.shape[1]
-    C_v_c[votes.A, :] = P_v_g_c[votes.A, :, :].prod(axis=0) ** (1.0 / n_groups)
-    C_v_c[votes.D, :] = P_v_g_c[votes.D, :, :].prod(axis=0) ** (1.0 / n_groups)
+
+    if consensus_mode == "standard":
+        # Jeffreys prior (0.5), effective agreement, geometric mean
+        P_agree_c = np.empty([group_count, len(statement_ids)])
+        P_disagree_c = np.empty([group_count, len(statement_ids)])
+        for gid in range(group_count):
+            P_agree_c[gid, :] = probability(N_v_g_c[votes.A, gid, :], N_g_c[gid, :], 0.5)
+            P_disagree_c[gid, :] = probability(N_v_g_c[votes.D, gid, :], N_g_c[gid, :], 0.5)
+        agree_scores = P_agree_c * (1 - P_disagree_c)
+        disagree_scores = P_disagree_c * (1 - P_agree_c)
+        C_v_c[votes.A, :] = agree_scores.prod(axis=0) ** (1.0 / n_groups)
+        C_v_c[votes.D, :] = disagree_scores.prod(axis=0) ** (1.0 / n_groups)
+    else:
+        # Legacy (Polis): Laplace smoothing (reuses P_v_g_c), raw product
+        C_v_c[votes.A, :] = P_v_g_c[votes.A, :, :].prod(axis=0)
+        C_v_c[votes.D, :] = P_v_g_c[votes.D, :, :].prod(axis=0)
 
     return (
         N_g_c,  # ns
@@ -500,6 +511,7 @@ def calculate_comment_statistics_dataframes(
     vote_matrix: VoteMatrix,
     cluster_labels: Optional[list[int] | NDArray[np.integer]] = None,
     pseudo_count: int = 1,
+    consensus_mode: Literal["standard", "legacy"] = "standard",
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Calculates comparative statement statistics across all votes and groups, generating dataframes.
@@ -521,6 +533,7 @@ def calculate_comment_statistics_dataframes(
             vote_matrix=vote_matrix,
             cluster_labels=cluster_labels,
             pseudo_count=pseudo_count,
+            consensus_mode=consensus_mode,
         )
     )
 
