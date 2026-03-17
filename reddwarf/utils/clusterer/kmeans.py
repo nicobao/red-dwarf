@@ -90,6 +90,9 @@ def find_best_kmeans(
 
     def scoring_function(estimator, X):
         labels = estimator.fit_predict(X)
+        unique, counts = np.unique(labels, return_counts=True)
+        if counts.min() < 2:
+            return -1
         return silhouette_score(X, labels)
 
     search = GridSearchNonCV(
