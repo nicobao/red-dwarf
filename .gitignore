@@ -20,3 +20,6 @@ __pycache__
 
 # python-cov
 .coverage
+
+# Claude research notes
+CLAUDE_*.md
