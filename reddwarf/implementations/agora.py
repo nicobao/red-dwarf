@@ -43,6 +43,9 @@ class AgoraClusteringResult:
     ranked_consensus: RankedConsensusResult
 
 
+TypedAgoraClusteringResult = base.AnalysisSuccess[AgoraClusteringResult] | base.AnalysisInsufficientData
+
+
 def compute_effective_agreement_gac(
     grouped_stats_df: pd.DataFrame,
     statement_ids,
@@ -131,4 +134,23 @@ def run_pipeline(
         group_aware_consensus=group_aware_consensus,
         ranked_repness=ranked_repness,
         ranked_consensus=ranked_consensus,
+    )
+
+
+def run_pipeline_typed(**kwargs) -> TypedAgoraClusteringResult:
+    reason = base.get_insufficient_data_reason(
+        votes=kwargs["votes"],
+        mod_out_statement_ids=kwargs.get("mod_out_statement_ids", []),
+        min_user_vote_threshold=kwargs.get("min_user_vote_threshold", 7),
+        keep_participant_ids=kwargs.get("keep_participant_ids", []),
+        force_group_count=kwargs.get("force_group_count"),
+    )
+    if reason is not None:
+        return base.AnalysisInsufficientData(
+            outcome=base.AnalysisOutcome.INSUFFICIENT_DATA,
+            reason=reason,
+        )
+    return base.AnalysisSuccess(
+        outcome=base.AnalysisOutcome.SUCCESS,
+        result=run_pipeline(**kwargs),
     )
