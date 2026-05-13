@@ -62,6 +62,27 @@ class PcaProjectionResult:
     statement_projections: Optional[dict]
 
 
+@dataclass(frozen=True)
+class KMeansCandidateSuccess(Generic[T]):
+    group_count: int
+    outcome: Literal[AnalysisOutcome.SUCCESS]
+    silhouette_score: float | None
+    result: T
+
+
+@dataclass(frozen=True)
+class KMeansCandidateInsufficientData:
+    group_count: int
+    outcome: Literal[AnalysisOutcome.INSUFFICIENT_DATA]
+    reason: InsufficientDataReason
+
+
+@dataclass
+class KMeansCandidatesResult(Generic[T]):
+    projection: PcaProjectionResult
+    candidates: list[KMeansCandidateSuccess[T] | KMeansCandidateInsufficientData]
+
+
 @dataclass
 class PolisClusteringResult:
     """
@@ -98,6 +119,11 @@ class PolisClusteringResult:
 TypedPolisClusteringResult = (
     AnalysisSuccess[PolisClusteringResult] | AnalysisInsufficientData
 )
+TypedPolisKMeansCandidatesResult = (
+    AnalysisSuccess[KMeansCandidatesResult[PolisClusteringResult]] | AnalysisInsufficientData
+)
+TypedPolisPipelineResult = TypedPolisClusteringResult | TypedPolisKMeansCandidatesResult
+CandidateGroupCounts = Literal["all"] | list[int] | None
 
 
 def get_insufficient_data_reason(
@@ -137,7 +163,10 @@ def get_insufficient_data_reason(
         return InsufficientDataReason.NOT_ENOUGH_SAMPLES_FOR_GROUP_COUNT
 
     clusterable_matrix = filtered_vote_matrix.loc[participant_ids_to_cluster, :].fillna(0)
-    if len(np.unique(clusterable_matrix.values, axis=0)) < 2:
+    unique_point_count = len(np.unique(clusterable_matrix.values, axis=0))
+    if unique_point_count < 2:
+        return InsufficientDataReason.NOT_ENOUGH_UNIQUE_POINTS
+    if force_group_count is not None and unique_point_count < force_group_count:
         return InsufficientDataReason.NOT_ENOUGH_UNIQUE_POINTS
 
     return None
@@ -288,6 +317,31 @@ def _build_clustering_result_from_projection(
     )
 
 
+def _get_kmeans_candidate_group_counts(
+    *,
+    max_group_count: int,
+    candidate_group_counts: Literal["all"] | list[int],
+) -> list[int]:
+    if candidate_group_counts == "all":
+        group_counts = list(range(2, max_group_count + 1))
+    else:
+        group_counts = candidate_group_counts
+
+    if not group_counts:
+        raise ValueError("at least one k-means group count is required")
+    if len(group_counts) < 2:
+        raise ValueError("use force_group_count for a single forced k-means group count")
+    if any(not isinstance(group_count, int) for group_count in group_counts):
+        raise ValueError("k-means group counts must be integers")
+    if any(group_count < 2 for group_count in group_counts):
+        raise ValueError("k-means group counts must be at least 2")
+    if any(group_count > max_group_count for group_count in group_counts):
+        raise ValueError("k-means group counts must not exceed max_group_count")
+    if group_counts != sorted(set(group_counts)):
+        raise ValueError("k-means group counts must be strictly increasing")
+    return group_counts
+
+
 def run_kmeans_on_pca_projection(
     *,
     projection: PcaProjectionResult,
@@ -319,6 +373,83 @@ def run_kmeans_on_pca_projection(
     )
 
 
+def run_kmeans_candidates_on_pca_projection(
+    *,
+    projection: PcaProjectionResult,
+    max_group_count: int = 5,
+    candidate_group_counts: Literal["all"] | list[int] = "all",
+    init_centers: Optional[list[list[float]]] = None,
+    random_state: Optional[int] = None,
+    mod_out_statement_ids: list[int] | None = None,
+    pick_max: int = 5,
+    confidence: float = 0.9,
+) -> KMeansCandidatesResult[PolisClusteringResult]:
+    """Run multiple forced-k k-means candidates from one prepared PCA projection."""
+    group_counts = _get_kmeans_candidate_group_counts(
+        max_group_count=max_group_count,
+        candidate_group_counts=candidate_group_counts,
+    )
+    clusterable_values = projection.filtered_vote_matrix.loc[
+        projection.participant_ids_to_cluster,
+        :,
+    ].fillna(0).values
+    unique_point_count = len(np.unique(clusterable_values, axis=0))
+    participant_count = len(projection.participant_ids_to_cluster)
+    candidates: list[
+        KMeansCandidateSuccess[PolisClusteringResult] | KMeansCandidateInsufficientData
+    ] = []
+
+    for group_count in group_counts:
+        if participant_count < group_count:
+            candidates.append(
+                KMeansCandidateInsufficientData(
+                    group_count=group_count,
+                    outcome=AnalysisOutcome.INSUFFICIENT_DATA,
+                    reason=InsufficientDataReason.NOT_ENOUGH_SAMPLES_FOR_GROUP_COUNT,
+                )
+            )
+            continue
+        if unique_point_count < group_count:
+            candidates.append(
+                KMeansCandidateInsufficientData(
+                    group_count=group_count,
+                    outcome=AnalysisOutcome.INSUFFICIENT_DATA,
+                    reason=InsufficientDataReason.NOT_ENOUGH_UNIQUE_POINTS,
+                )
+            )
+            continue
+
+        result = run_kmeans_on_pca_projection(
+            projection=projection,
+            force_group_count=group_count,
+            init_centers=init_centers,
+            random_state=random_state,
+            mod_out_statement_ids=mod_out_statement_ids,
+            pick_max=pick_max,
+            confidence=confidence,
+        )
+        candidates.append(
+            KMeansCandidateSuccess(
+                group_count=group_count,
+                outcome=AnalysisOutcome.SUCCESS,
+                silhouette_score=(
+                    calculate_projection_silhouette_score(
+                        projection=projection,
+                        clusterer_model=result.clusterer,
+                    )
+                    if result.clusterer is not None
+                    else None
+                ),
+                result=result,
+            )
+        )
+
+    return KMeansCandidatesResult(
+        projection=projection,
+        candidates=candidates,
+    )
+
+
 def calculate_projection_silhouette_score(
     *,
     projection: PcaProjectionResult,
@@ -331,25 +462,6 @@ def calculate_projection_silhouette_score(
             ["x", "y"],
         ].values,
         labels=clusterer_model.labels_,
-    )
-
-
-def run_pipeline_typed(**kwargs) -> TypedPolisClusteringResult:
-    reason = get_insufficient_data_reason(
-        votes=kwargs["votes"],
-        mod_out_statement_ids=kwargs.get("mod_out_statement_ids", []),
-        min_user_vote_threshold=kwargs.get("min_user_vote_threshold", 7),
-        keep_participant_ids=kwargs.get("keep_participant_ids", []),
-        force_group_count=kwargs.get("force_group_count"),
-    )
-    if reason is not None:
-        return AnalysisInsufficientData(
-            outcome=AnalysisOutcome.INSUFFICIENT_DATA,
-            reason=reason,
-        )
-    return AnalysisSuccess(
-        outcome=AnalysisOutcome.SUCCESS,
-        result=run_pipeline(**kwargs),
     )
 
 
@@ -369,7 +481,8 @@ def run_pipeline(
     random_state: Optional[int] = None,
     pick_max: int = 5,
     confidence: float = 0.9,
-) -> PolisClusteringResult:
+    candidate_group_counts: CandidateGroupCounts = None,
+) -> TypedPolisPipelineResult:
     """
     An essentially feature-complete implementation of the Polis clustering algorithm.
 
@@ -394,11 +507,100 @@ def run_pipeline(
         random_state (int): If set, will force determinism during k-means clustering
         confidence (float): Percent confidence interval (in decimal), within which selected statements are deemed significant
         pick_max (int): Max number of statements selected for consensus (per direction) and representative (per group).
+        candidate_group_counts ("all" | list[int]): Return one forced-k result per candidate group count after reusing the PCA projection.
 
 
     Returns:
-        PolisClusteringResult: A dataclass containing clustering results, including intermediate calculations.
+        AnalysisSuccess or AnalysisInsufficientData. On success, `result` contains either
+        PolisClusteringResult or KMeansCandidatesResult when candidate_group_counts is set.
     """
+    if force_group_count is not None and candidate_group_counts is not None:
+        raise ValueError("force_group_count and candidate_group_counts cannot both be set")
+
+    reason = get_insufficient_data_reason(
+        votes=votes,
+        mod_out_statement_ids=mod_out_statement_ids,
+        min_user_vote_threshold=min_user_vote_threshold,
+        keep_participant_ids=keep_participant_ids,
+        force_group_count=None if candidate_group_counts is not None else force_group_count,
+    )
+    if reason is not None:
+        return AnalysisInsufficientData(
+            outcome=AnalysisOutcome.INSUFFICIENT_DATA,
+            reason=reason,
+        )
+
+    if candidate_group_counts is not None:
+        if reducer != "pca":
+            raise ValueError("candidate_group_counts only supports the pca reducer")
+        if clusterer != "kmeans":
+            raise ValueError("candidate_group_counts only supports the kmeans clusterer")
+        candidate_group_counts = _get_kmeans_candidate_group_counts(
+            max_group_count=max_group_count,
+            candidate_group_counts=candidate_group_counts,
+        )
+        projection = prepare_pca_projection(
+            votes=votes,
+            reducer_kwargs=reducer_kwargs,
+            mod_out_statement_ids=mod_out_statement_ids,
+            meta_statement_ids=meta_statement_ids,
+            min_user_vote_threshold=min_user_vote_threshold,
+            keep_participant_ids=keep_participant_ids,
+            random_state=random_state,
+        )
+        return AnalysisSuccess(
+            outcome=AnalysisOutcome.SUCCESS,
+            result=run_kmeans_candidates_on_pca_projection(
+                projection=projection,
+                max_group_count=max_group_count,
+                candidate_group_counts=candidate_group_counts,
+                init_centers=init_centers,
+                random_state=random_state,
+                mod_out_statement_ids=mod_out_statement_ids,
+                pick_max=pick_max,
+                confidence=confidence,
+            ),
+        )
+
+    return AnalysisSuccess(
+        outcome=AnalysisOutcome.SUCCESS,
+        result=_run_pipeline_success(
+            votes=votes,
+            reducer=reducer,
+            reducer_kwargs=reducer_kwargs,
+            clusterer=clusterer,
+            clusterer_kwargs=clusterer_kwargs,
+            mod_out_statement_ids=mod_out_statement_ids,
+            meta_statement_ids=meta_statement_ids,
+            min_user_vote_threshold=min_user_vote_threshold,
+            keep_participant_ids=keep_participant_ids,
+            init_centers=init_centers,
+            max_group_count=max_group_count,
+            force_group_count=force_group_count,
+            random_state=random_state,
+            pick_max=pick_max,
+            confidence=confidence,
+        ),
+    )
+
+
+def _run_pipeline_success(
+    votes: list[dict],
+    reducer: ReducerType = "pca",
+    reducer_kwargs: dict = {},
+    clusterer: ClustererType = "kmeans",
+    clusterer_kwargs: dict = {},
+    mod_out_statement_ids: list[int] = [],
+    meta_statement_ids: list[int] = [],
+    min_user_vote_threshold: int = 7,
+    keep_participant_ids: list[int] = [],
+    init_centers: Optional[list[list[float]]] = None,
+    max_group_count: int = 5,
+    force_group_count: Optional[int] = None,
+    random_state: Optional[int] = None,
+    pick_max: int = 5,
+    confidence: float = 0.9,
+) -> PolisClusteringResult:
     raw_vote_matrix = generate_raw_matrix(votes=votes)
 
     filtered_vote_matrix = simple_filter_matrix(
