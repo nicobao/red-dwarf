@@ -1,7 +1,17 @@
 import pytest
 import numpy as np
-from reddwarf.implementations.base import run_pipeline
+from pandas.testing import assert_frame_equal
+from reddwarf.implementations.base import (
+    AnalysisOutcome,
+    InsufficientDataReason,
+    calculate_projection_silhouette_score,
+    prepare_pca_projection,
+    run_kmeans_on_pca_projection,
+    run_pipeline,
+    run_pipeline_typed,
+)
 from reddwarf.data_loader import Loader
+from reddwarf.utils.statements import process_statements
 from tests.fixtures import polis_convo_data, convert_ids
 from tests import helpers
 
@@ -155,3 +165,118 @@ def test_run_pipeline_handles_nonexistent_keep_participant_ids(polis_convo_data)
     # The non-existent IDs should be silently ignored (not cause a crash)
     assert max_existing_id + 1000 not in clustered_participant_ids
     assert max_existing_id + 2000 not in clustered_participant_ids
+
+
+def test_run_pipeline_typed_detects_empty_vote_matrix():
+    result = run_pipeline_typed(votes=[])
+
+    assert result.outcome == AnalysisOutcome.INSUFFICIENT_DATA
+    assert result.reason == InsufficientDataReason.EMPTY_VOTE_MATRIX
+
+
+def test_run_pipeline_typed_detects_not_enough_clusterable_participants():
+    result = run_pipeline_typed(
+        votes=[{"participant_id": 1, "statement_id": 1, "vote": 1}],
+        min_user_vote_threshold=1,
+    )
+
+    assert result.outcome == AnalysisOutcome.INSUFFICIENT_DATA
+    assert result.reason == InsufficientDataReason.NOT_ENOUGH_CLUSTERABLE_PARTICIPANTS
+
+
+def test_run_pipeline_typed_detects_not_enough_samples_for_group_count():
+    result = run_pipeline_typed(
+        votes=[
+            {"participant_id": 1, "statement_id": 1, "vote": 1},
+            {"participant_id": 2, "statement_id": 1, "vote": -1},
+        ],
+        min_user_vote_threshold=1,
+        force_group_count=3,
+    )
+
+    assert result.outcome == AnalysisOutcome.INSUFFICIENT_DATA
+    assert result.reason == InsufficientDataReason.NOT_ENOUGH_SAMPLES_FOR_GROUP_COUNT
+
+
+def test_run_pipeline_typed_detects_not_enough_unique_points():
+    result = run_pipeline_typed(
+        votes=[
+            {"participant_id": 1, "statement_id": 1, "vote": 1},
+            {"participant_id": 2, "statement_id": 1, "vote": 1},
+        ],
+        min_user_vote_threshold=1,
+        force_group_count=2,
+    )
+
+    assert result.outcome == AnalysisOutcome.INSUFFICIENT_DATA
+    assert result.reason == InsufficientDataReason.NOT_ENOUGH_UNIQUE_POINTS
+
+
+@pytest.mark.parametrize("polis_convo_data", ["small-no-meta"], indirect=True)
+def test_run_pipeline_typed_success(polis_convo_data):
+    fixture = polis_convo_data
+    loader = Loader(filepaths=[f"{fixture.data_dir}/votes.json"])
+
+    result = run_pipeline_typed(
+        votes=loader.votes_data,
+        force_group_count=2,
+    )
+
+    assert result.outcome == AnalysisOutcome.SUCCESS
+    assert result.result.clusterer is not None
+
+
+@pytest.mark.parametrize("polis_convo_data", ["small-no-meta"], indirect=True)
+def test_pca_projection_can_be_reused_for_forced_kmeans(polis_convo_data):
+    fixture = polis_convo_data
+    loader = Loader(
+        filepaths=[
+            f"{fixture.data_dir}/votes.json",
+            f"{fixture.data_dir}/comments.json",
+        ]
+    )
+    _, _, mod_out_statement_ids, meta_statement_ids = process_statements(
+        statement_data=loader.comments_data
+    )
+    force_group_count = 2
+
+    projection = prepare_pca_projection(
+        votes=loader.votes_data,
+        mod_out_statement_ids=mod_out_statement_ids,
+        meta_statement_ids=meta_statement_ids,
+    )
+    reused = run_kmeans_on_pca_projection(
+        projection=projection,
+        force_group_count=force_group_count,
+        mod_out_statement_ids=mod_out_statement_ids,
+    )
+    direct = run_pipeline(
+        votes=loader.votes_data,
+        mod_out_statement_ids=mod_out_statement_ids,
+        meta_statement_ids=meta_statement_ids,
+        force_group_count=force_group_count,
+    )
+
+    assert_frame_equal(
+        reused.participants_df.loc[:, ["x", "y", "to_cluster", "cluster_id"]],
+        direct.participants_df.loc[:, ["x", "y", "to_cluster", "cluster_id"]],
+    )
+    assert_frame_equal(reused.statements_df, direct.statements_df)
+
+
+@pytest.mark.parametrize("polis_convo_data", ["small-no-meta"], indirect=True)
+def test_projection_silhouette_score_api(polis_convo_data):
+    fixture = polis_convo_data
+    loader = Loader(filepaths=[f"{fixture.data_dir}/votes.json"])
+    projection = prepare_pca_projection(votes=loader.votes_data)
+    result = run_kmeans_on_pca_projection(
+        projection=projection,
+        force_group_count=2,
+    )
+
+    score = calculate_projection_silhouette_score(
+        projection=projection,
+        clusterer_model=result.clusterer,
+    )
+
+    assert score is not None
