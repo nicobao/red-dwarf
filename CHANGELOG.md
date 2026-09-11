@@ -2,6 +2,15 @@
 
 ## [Unreleased][] (YYYY-MM-DD)
 
+### Changes
+
+- Return typed insufficient-data outcomes when projected participants cannot form
+  the requested k-means groups. Candidate batches reuse PCA and preserve feasible
+  group counts; automatic group search is capped by projected diversity.
+- `run_kmeans_on_pca_projection()` now returns `AnalysisSuccess` or
+  `AnalysisInsufficientData`, matching `run_pipeline()`. On success, access the
+  clustering payload through `.result`.
+
 ### Chores
 
 - Add CLAUDE.md for Claude Code guidance. ([#115][])
